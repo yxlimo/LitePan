@@ -189,6 +189,11 @@ func isCollectionContainerDir(name string) bool {
 	if raw == "" {
 		return false
 	}
+	// collectionContainerHintRe 里有裸的 "/" 分支，任何名字里带斜杠的目录都会被判成合集容器。
+	// 名字本身只是分隔符（或反复由分隔符组成）时并不是「装多部作品的容器」，先排除。
+	if strings.Trim(raw, "/\\ 　\t") == "" {
+		return false
+	}
 	if LooksLikeSceneMovieRelease(raw) {
 		return false
 	}

@@ -15,10 +15,18 @@ var DefaultMediaTagOrder = []string{
 	"screen_size", "frame_rate", "video_codec", "audio_codec", "audio_channels",
 }
 
+// GenericMediaDirNames 是「通用媒体目录」白名单：这些目录只是落盘/中转位置，
+// 不是用户表达的作品分类意图，整理时不应该被当成「分类层级」照搬或跳过建目录。
+// 注意要覆盖常见的下载/临时落盘目录（下载、downloads、temp、未分类…），
+// 漏掉它们会让 rename 模式下的散落文件只在原地改名，观感上等于「重命名完扔根目录」。
 var GenericMediaDirNames = map[string]struct{}{
 	"电影": {}, "影片": {}, "movie": {}, "movies": {},
 	"电视剧": {}, "剧集": {}, "连续剧": {}, "tv": {}, "tv shows": {}, "shows": {}, "series": {},
 	"动漫": {}, "动画": {}, "anime": {}, "media": {}, "video": {}, "videos": {}, "视频": {},
+	// 下载/临时落盘目录
+	"下载": {}, "download": {}, "downloads": {}, "temp": {}, "tmp": {},
+	// 未整理/待归类目录
+	"未分类": {}, "其他": {}, "未整理": {}, "待整理": {}, "unsorted": {}, "incoming": {},
 }
 
 var KnownReleaseGroups = map[string]struct{}{

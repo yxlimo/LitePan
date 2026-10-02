@@ -271,6 +271,7 @@ func (p *Planner) finalize() *moplan.Plan {
 	} else if p.diagnostics != nil {
 		p.diagnostics["needs_match"] = []map[string]any{}
 	}
+	p.auditWorkDirsWithoutCategory()
 	// 诊断：扫描目录数与失败清单，用于区分「目录为空」和「目录没扫到」。
 	if p.diagnostics != nil {
 		p.diagnostics["scanned_dirs"] = p.scannedDirs
@@ -292,6 +293,46 @@ func (p *Planner) finalize() *moplan.Plan {
 		Actions:        append([]moplan.PlanAction(nil), p.actions...),
 		Skipped:        append([]map[string]any(nil), p.skippedItems...),
 		Diagnostics:    p.diagnostics,
+	}
+}
+
+// auditWorkDirsWithoutCategory 自检：作品目录是否直接挂在移动根、且没有任何分类依据。
+//
+// 移动根目录往往是用户配的网盘根，「作品目录直接挂上去」在观感上就等于
+// 「扔到根目录」。正常路径下这类条目应该已经被媒体类型兜底层接住
+// （见 resolveWorkDirParent），这里做兜底断言：真出现了就写进诊断，
+// 让用户在计划预览里一眼看到「有 N 个作品目录没有进分类目录」。
+func (p *Planner) auditWorkDirsWithoutCategory() {
+	if p.diagnostics == nil || p.targetRootID == "" {
+		return
+	}
+	offenders := make([]map[string]any, 0)
+	for i := range p.actions {
+		a := &p.actions[i]
+		if a.Kind != moplan.ActionKindEnsureDir && a.Kind != moplan.ActionKindMoveAndRenameDir {
+			continue
+		}
+		if isWork, _ := a.Metadata["is_work_dir"].(bool); !isWork {
+			continue
+		}
+		if a.TargetParentID != p.targetRootID {
+			continue
+		}
+		if matched, _ := a.Metadata["classification_matched"].(bool); matched {
+			continue
+		}
+		offenders = append(offenders, map[string]any{
+			"action_id":   a.ID,
+			"target_name": a.TargetName,
+			"source_id":   strMeta(aMetadata(a, "source_dir_id"), a.SourceID),
+		})
+	}
+	p.diagnostics["work_dir_without_category"] = offenders
+	if len(offenders) > 0 {
+		p.log(fmt.Sprintf(
+			"[计划] 有 %d 个作品目录直接挂在移动根目录且没有分类依据，建议检查分类整理配置或调整目标目录",
+			len(offenders),
+		))
 	}
 }
 
