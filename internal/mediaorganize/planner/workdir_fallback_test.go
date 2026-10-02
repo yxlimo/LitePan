@@ -2,6 +2,9 @@ package planner_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"litepan/internal/domain"
@@ -238,3 +241,162 @@ func TestWorkDirMetadataKeepsClassificationSnapshot(t *testing.T) {
 }
 
 var _ = moplan.ActionKindEnsureDir
+
+// yearMismatchTMDBStub 模拟「带年份搜不到、去掉年份搜到真实年份」的情况：
+// 目录名/文件名里的年份是错的。
+type yearMismatchTMDBStub struct{}
+
+func (*yearMismatchTMDBStub) ValidateConnection(context.Context) bool { return true }
+
+func (*yearMismatchTMDBStub) Search(_ context.Context, _ string, year *int, _ string) ([]json.RawMessage, error) {
+	if year != nil {
+		// 带年份搜不到任何结果。
+		return nil, nil
+	}
+	return []json.RawMessage{
+		json.RawMessage(`{"id":19995,"title":"阿凡达","original_title":"Avatar","release_date":"2009-12-18"}`),
+	}, nil
+}
+
+func (*yearMismatchTMDBStub) Lookup(context.Context, string, string) (json.RawMessage, error) {
+	return nil, nil
+}
+
+func (*yearMismatchTMDBStub) FetchTVSeasons(context.Context, string) ([]json.RawMessage, error) {
+	return nil, nil
+}
+
+// Bug 4 端到端：目录名/文件名里的年份是错的（2010）时，
+// 应匹配到真实的《阿凡达》(2009) 并把目录名纠正为真实年份，
+// 而不是匹配失败后把名字「修正」成错年份、导致之后每次整理重复失败。
+func TestYearMismatchCorrectsFolderNameToTMDBYear(t *testing.T) {
+	fs := &mockFS{dirs: map[string][]domain.FileItem{
+		"root": {{ID: "work", Name: "阿凡达 (2010)", IsDir: true}},
+		"work": {{ID: "f1", Name: "阿凡达.2010.1080p.mkv"}},
+	}}
+	p := planner.New(context.Background(), fs, 1, planner.TaskConfig{
+		TargetDirectoryID: "root",
+		TargetRootID:      "target",
+		ActionType:        "move",
+		MediaType:         "auto",
+		UseTMDB:           true,
+		Recursive:         true,
+	}, planner.Settings{"mo_tmdb_api_key": "k"}, "task", &yearMismatchTMDBStub{}, nil, nil, nil)
+
+	plan, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workDir := findWorkDir(plan.Actions)
+	if workDir == nil {
+		t.Fatalf("未生成作品目录: %+v", plan.Actions)
+	}
+	if workDir.TargetName != "阿凡达 (2009) {tmdb-19995}" {
+		t.Fatalf("目录名应被纠正为 TMDB 真实年份，实际 %q", workDir.TargetName)
+	}
+	// TMDB 快照与年份提示挂在文件动作上（作品目录动作只带 is_work_dir/source_dir_id）。
+	var fileAction *moplan.PlanAction
+	for i := range plan.Actions {
+		if plan.Actions[i].SourceID == "f1" {
+			fileAction = &plan.Actions[i]
+		}
+	}
+	if fileAction == nil {
+		t.Fatalf("未生成文件动作: %+v", plan.Actions)
+	}
+	if !strings.Contains(fileAction.TargetName, "(2009)") {
+		t.Fatalf("文件名也应使用 TMDB 真实年份，实际 %q", fileAction.TargetName)
+	}
+	if fileAction.Metadata["tmdb_id"] != "19995" {
+		t.Fatalf("应带上 TMDB ID: %+v", fileAction.Metadata)
+	}
+	if fileAction.Metadata["year_mismatch"] != true {
+		t.Fatalf("应标记 year_mismatch 供 UI 提示: %+v", fileAction.Metadata)
+	}
+	if fileAction.Metadata["declared_year"] != 2010 {
+		t.Fatalf("应记录声明年份: %+v", fileAction.Metadata)
+	}
+	if fileAction.Metadata["tmdb_year"] != 2009 {
+		t.Fatalf("应记录 TMDB 年份: %+v", fileAction.Metadata)
+	}
+	if fileAction.Metadata["group_old_dir_name"] != "阿凡达 (2010)" {
+		t.Fatalf("应保留原目录名以便追溯: %+v", fileAction.Metadata)
+	}
+	// 匹配成功了就不该再登记 needs_match。
+	needs, _ := plan.Diagnostics["needs_match"].([]map[string]any)
+	for _, entry := range needs {
+		if entry["title"] == "阿凡达" {
+			t.Fatalf("年份不符但已匹配，不应登记 needs_match: %+v", entry)
+		}
+	}
+}
+
+// 候选彼此难分高下（同名不同年、无唯一相邻年份）时，仍应判 needs_match，
+// 但要带上「年份对不上」的候选，让用户能区分「真的没有」和「年份挡住了」。
+func TestYearMismatchBlockedMatchExposesCandidatesInNeedsMatch(t *testing.T) {
+	fs := &mockFS{dirs: map[string][]domain.FileItem{
+		"root": {{ID: "work", Name: "重制版电影 (2020)", IsDir: true}},
+		"work": {{ID: "f1", Name: "重制版电影.2020.1080p.mkv"}},
+	}}
+	p := planner.New(context.Background(), fs, 1, planner.TaskConfig{
+		TargetDirectoryID: "root",
+		TargetRootID:      "target",
+		ActionType:        "move",
+		MediaType:         "auto",
+		UseTMDB:           true,
+		Recursive:         true,
+	}, planner.Settings{"mo_tmdb_api_key": "k"}, "task", &ambiguousYearTMDBStub{}, nil, nil, nil)
+
+	plan, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	needs, _ := plan.Diagnostics["needs_match"].([]map[string]any)
+	var entry map[string]any
+	for _, e := range needs {
+		if e["title"] == "重制版电影" {
+			entry = e
+		}
+	}
+	if entry == nil {
+		t.Fatalf("同分候选应判 needs_match: %+v", plan.Diagnostics["needs_match"])
+	}
+	if entry["degraded_reason"] != "year_mismatch" {
+		t.Fatalf("needs_match 应标注年份原因，实际 %+v", entry)
+	}
+	cands, _ := entry["year_mismatch_candidates"].([]map[string]any)
+	if len(cands) == 0 {
+		t.Fatalf("needs_match 应带上年份不符的候选: %+v", entry)
+	}
+	for _, c := range cands {
+		if c["year_gap"] != true || c["tmdb_id"] == "" {
+			t.Fatalf("候选应带 tmdb_id 与年份不符标记: %+v", c)
+		}
+	}
+	if !strings.Contains(fmt.Sprint(entry["reason"]), "年份") {
+		t.Fatalf("needs_match 文案应点明年份原因: %+v", entry)
+	}
+}
+
+type ambiguousYearTMDBStub struct{}
+
+func (*ambiguousYearTMDBStub) ValidateConnection(context.Context) bool { return true }
+
+func (*ambiguousYearTMDBStub) Search(_ context.Context, _ string, year *int, _ string) ([]json.RawMessage, error) {
+	if year != nil {
+		return nil, nil
+	}
+	// 两个同名不同年份、标题评分相同 => 歧义。
+	return []json.RawMessage{
+		json.RawMessage(`{"id":5001,"title":"重制版电影","release_date":"2010-01-01"}`),
+		json.RawMessage(`{"id":5002,"title":"重制版电影","release_date":"2015-01-01"}`),
+	}, nil
+}
+
+func (*ambiguousYearTMDBStub) Lookup(context.Context, string, string) (json.RawMessage, error) {
+	return nil, nil
+}
+
+func (*ambiguousYearTMDBStub) FetchTVSeasons(context.Context, string) ([]json.RawMessage, error) {
+	return nil, nil
+}

@@ -2,6 +2,7 @@ package rules
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -139,6 +140,10 @@ func IsTMDBTitleCompatible(query, resultTitle, resultOriginal string) bool {
 	return false
 }
 
+// tmdbYearMismatchMargin 年份不命中时，候选标题评分需要拉开的最小分差。
+// 分差不足说明「有多个看起来都像的候选」，属于歧义，应交人工选择而不是硬猜。
+const tmdbYearMismatchMargin = 0.2
+
 func PickTMDBMatchForYear(results []map[string]any, expectedYear *int, mediaType, queryTitle string) map[string]any {
 	if len(results) == 0 {
 		return nil
@@ -158,7 +163,10 @@ func PickTMDBMatchForYear(results []map[string]any, expectedYear *int, mediaType
 				return item
 			}
 		}
-		return nil
+		// 年份不是红线：文件名里的年份经常是错的（上错年、不同版本、不同来源标注），
+		// 年份不同就彻底放弃匹配会形成死循环——匹配失败 -> 名字被「修正」成错年份
+		// -> 之后每次整理重复失败。这里降级为加权项。
+		return pickTMDBYearMismatchMatch(results, *expectedYear, mediaType, qt, compatible)
 	}
 	if qt != "" {
 		for _, item := range results {
@@ -171,7 +179,182 @@ func PickTMDBMatchForYear(results []map[string]any, expectedYear *int, mediaType
 	return results[0]
 }
 
+// pickTMDBYearMismatchMatch 在年份不命中的候选里挑一个「标题唯一强匹配」的：
+// 1) 先走最严格的相邻年份 + 片名强相等 + 唯一（PickUniqueTMDBAdjacentYearMatch）
+// 2) 再退到标题兼容候选里按 ScoreTitleForTMDB 打分，只有 top1 与 top2 分差足够大才接受
+// 3) 都不满足则判歧义，返回 nil
+func pickTMDBYearMismatchMatch(
+	results []map[string]any,
+	expectedYear int,
+	mediaType, queryTitle string,
+	compatible func(map[string]any) bool,
+) map[string]any {
+	if queryTitle == "" {
+		return nil
+	}
+	if m := PickUniqueTMDBAdjacentYearMatch(results, &expectedYear, mediaType, queryTitle); m != nil {
+		return m
+	}
+	candidates := collectTMDBCompatibleCandidates(results, expectedYear, mediaType, queryTitle, compatible)
+	if len(candidates) == 0 {
+		return nil
+	}
+	sortTMDBScoredCandidates(candidates)
+	// 分差不足说明「有多个看起来都像的候选」，属于歧义，交给人工选择而不是硬猜。
+	if len(candidates) > 1 && candidates[0].score-candidates[1].score < tmdbYearMismatchMargin {
+		return nil
+	}
+	return candidates[0].item
+}
+
+// tmdbScoredCandidate 是「标题兼容」的候选及其标题评分。
+type tmdbScoredCandidate struct {
+	year    *int
+	yearGap int
+	score   float64
+	item    map[string]any
+}
+
+func collectTMDBCompatibleCandidates(
+	results []map[string]any,
+	expectedYear int,
+	mediaType, queryTitle string,
+	compatible func(map[string]any) bool,
+) []tmdbScoredCandidate {
+	candidates := make([]tmdbScoredCandidate, 0, len(results))
+	seen := map[string]struct{}{}
+	for _, item := range results {
+		if !compatible(item) {
+			continue
+		}
+		id, title, original, year := ExtractTMDBDisplayFields(item, mediaType)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		best := ScoreTitleForTMDB(title)
+		if s := ScoreTitleForTMDB(original); s > best {
+			best = s
+		}
+		if best <= 0 {
+			continue
+		}
+		gap := int(^uint(0) >> 1) // 无年份的候选视为最不接近
+		if year != nil {
+			gap = absInt(*year - expectedYear)
+		}
+		candidates = append(candidates, tmdbScoredCandidate{year: year, yearGap: gap, score: best, item: item})
+	}
+	return candidates
+}
+
+// sortTMDBScoredCandidates 标题分高者优先；同分时年份更接近者优先。
+func sortTMDBScoredCandidates(candidates []tmdbScoredCandidate) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].yearGap < candidates[j].yearGap
+	})
+}
+
+// CollectTMDBYearMismatchCandidates 收集「标题兼容但年份与声明年份不符」的候选。
+// 用于计划预览区分「TMDB 真的没有这部片子」和「有很像的候选但年份对不上」，
+// 让 needs_match 的文案带上可一键采纳的候选。
+func CollectTMDBYearMismatchCandidates(
+	results []map[string]any,
+	expectedYear *int,
+	mediaType, queryTitle string,
+) []map[string]any {
+	if expectedYear == nil || len(results) == 0 || strings.TrimSpace(queryTitle) == "" {
+		return nil
+	}
+	compatible := func(item map[string]any) bool {
+		_, t, o, _ := ExtractTMDBDisplayFields(item, mediaType)
+		return IsTMDBTitleCompatible(strings.TrimSpace(queryTitle), t, o)
+	}
+	candidates := collectTMDBCompatibleCandidates(results, *expectedYear, mediaType, queryTitle, compatible)
+	out := make([]map[string]any, 0, len(candidates))
+	for _, c := range candidates {
+		if c.year != nil && *c.year == *expectedYear {
+			continue
+		}
+		out = append(out, c.item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// PickTMDBSearchMatchRelaxed 年份完全不参与打分：片名强相等且候选唯一才接受。
+//
+// 用于「去掉年份重新搜索之后」的最后一次尝试——此前那个分支仍复用同一个年份门槛，
+// 等于白搜一遍：搜回来的结果照样被年份挡掉。
+func PickTMDBSearchMatchRelaxed(results []map[string]any, mediaType, queryTitle string) map[string]any {
+	queryKey := strongTMDBTitleKey(queryTitle)
+	if len(results) == 0 || queryKey == "" {
+		return nil
+	}
+	var picked map[string]any
+	pickedID := ""
+	for _, item := range results {
+		id, title, original, _ := ExtractTMDBDisplayFields(item, mediaType)
+		if id == "" {
+			continue
+		}
+		if strongTMDBTitleKey(title) != queryKey && strongTMDBTitleKey(original) != queryKey {
+			continue
+		}
+		if picked != nil && pickedID != id {
+			// 多个同片名候选（例如重映版/不同年份版本），判歧义交给人工选择。
+			return nil
+		}
+		picked, pickedID = item, id
+	}
+	return picked
+}
+
 // PickTMDBSearchMatchForYear 先做严格标题匹配，只有年份明确且一致时才放宽译名/别名候选的标题校验。
+// PickTMDBSearchMatchExactYear 只接受年份完全相等的候选，不做任何放宽。
+//
+// 用于「带年份的第一次搜索」：TMDB 在这次查询里已经按年份过滤过，候选集不完整，
+// 此时判断「±1 年候选是否唯一」会得到偏乐观的结论。需要严格年份门禁的调用方
+// （如 strmscrape 需要据此标记 doubt）应该用这个函数，而不是 PickTMDBSearchMatchForYear。
+func PickTMDBSearchMatchExactYear(results []map[string]any, expectedYear *int, mediaType, queryTitle string) map[string]any {
+	if len(results) == 0 {
+		return nil
+	}
+	qt := strings.TrimSpace(queryTitle)
+	if expectedYear != nil {
+		for _, item := range results {
+			_, _, _, resultYear := ExtractTMDBDisplayFields(item, mediaType)
+			if resultYear != nil && *resultYear == *expectedYear &&
+				(qt == "" || titleCompatibleWith(qt, item, mediaType)) {
+				return item
+			}
+		}
+		return nil
+	}
+	if qt != "" {
+		for _, item := range results {
+			if titleCompatibleWith(qt, item, mediaType) {
+				return item
+			}
+		}
+		return nil
+	}
+	return results[0]
+}
+
+func titleCompatibleWith(queryTitle string, item map[string]any, mediaType string) bool {
+	_, t, o, _ := ExtractTMDBDisplayFields(item, mediaType)
+	return IsTMDBTitleCompatible(queryTitle, t, o)
+}
+
 func PickTMDBSearchMatchForYear(results []map[string]any, expectedYear *int, mediaType, queryTitle string) map[string]any {
 	if selected := PickTMDBMatchForYear(results, expectedYear, mediaType, queryTitle); selected != nil {
 		return selected

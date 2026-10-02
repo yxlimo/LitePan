@@ -43,7 +43,8 @@ func TestPickTMDBMatchWithRealSearchPayload(t *testing.T) {
 	}
 }
 
-func TestPickTMDBMatchRequiresExactYear(t *testing.T) {
+// 年份从「红线」降级为「加权项」：优先精确年份，年份不命中时接受唯一强标题匹配。
+func TestPickTMDBMatchPrefersExactYearThenFallsBack(t *testing.T) {
 	results := RawJSONListToMaps([]json.RawMessage{
 		json.RawMessage(`{"id":2024,"title":"同名电影","release_date":"2024-01-01"}`),
 		json.RawMessage(`{"id":2025,"title":"同名电影","release_date":"2025-01-01"}`),
@@ -56,10 +57,62 @@ func TestPickTMDBMatchRequiresExactYear(t *testing.T) {
 		t.Fatalf("应优先且只接受完全相等年份，实际 tmdb id=%q", id)
 	}
 
+	// 年份 2023 无精确命中，但 2024 是唯一相邻年份 + 片名强相等候选，应被接受。
 	year = 2023
-	if selected := PickTMDBMatchForYear(results, &year, "movie", "同名电影"); selected != nil {
+	selected = PickTMDBMatchForYear(results, &year, "movie", "同名电影")
+	if id, _, _, _ := ExtractTMDBDisplayFields(selected, "movie"); id != "2024" {
+		t.Fatalf("唯一相邻年份强匹配应被接受，实际 tmdb id=%q", id)
+	}
+}
+
+// 候选彼此难分高下时必须判歧义，而不是硬猜一个。
+func TestPickTMDBMatchKeepsAmbiguityWithoutMargin(t *testing.T) {
+	results := RawJSONListToMaps([]json.RawMessage{
+		json.RawMessage(`{"id":100,"title":"目标电影","release_date":"2010-01-01"}`),
+		json.RawMessage(`{"id":200,"title":"目标电影","release_date":"2015-01-01"}`),
+	})
+	year := 2020
+	// 两个标题完全同分、又没有唯一的相邻年份候选 => 歧义。
+	if selected := PickTMDBMatchForYear(results, &year, "movie", "目标电影"); selected != nil {
 		id, _, _, _ := ExtractTMDBDisplayFields(selected, "movie")
-		t.Fatalf("没有完全相等年份时应拒绝相邻年份，实际 tmdb id=%q", id)
+		t.Fatalf("同分候选应判歧义，实际 tmdb id=%q", id)
+	}
+}
+
+// 标题不兼容时，无论年份差多远都不能匹配。
+func TestPickTMDBMatchRejectsUnrelatedTitleRegardlessOfYearGap(t *testing.T) {
+	results := RawJSONListToMaps([]json.RawMessage{
+		json.RawMessage(`{"id":1,"title":"完全不同的电影","release_date":"2025-01-01"}`),
+	})
+	year := 2025
+	if selected := PickTMDBMatchForYear(results, &year, "movie", "目标电影"); selected != nil {
+		t.Fatalf("标题不相符时应拒绝，实际=%v", selected)
+	}
+}
+
+// 去掉年份重搜之后不能复用同一个年份门槛（等于白搜）：
+// Relaxed 语义 = 年份不参与打分，片名强相等且候选唯一才接受。
+func TestPickTMDBSearchMatchRelaxedIgnoresYear(t *testing.T) {
+	results := RawJSONListToMaps([]json.RawMessage{
+		json.RawMessage(`{"id":19995,"title":"阿凡达","release_date":"2009-12-18"}`),
+	})
+	selected := PickTMDBSearchMatchRelaxed(results, "movie", "阿凡达")
+	if id, _, _, _ := ExtractTMDBDisplayFields(selected, "movie"); id != "19995" {
+		t.Fatalf("年份不参与时唯一强匹配应被接受，实际 tmdb id=%q", id)
+	}
+
+	// 同片名多版本 => 判歧义，交人工选择。
+	multi := RawJSONListToMaps([]json.RawMessage{
+		json.RawMessage(`{"id":1,"title":"阿凡达","release_date":"2009-12-18"}`),
+		json.RawMessage(`{"id":2,"title":"阿凡达","release_date":"2022-01-01"}`),
+	})
+	if selected := PickTMDBSearchMatchRelaxed(multi, "movie", "阿凡达"); selected != nil {
+		t.Fatalf("多版本同片名应判歧义，实际=%v", selected)
+	}
+
+	// 标题不匹配不接受。
+	if selected := PickTMDBSearchMatchRelaxed(results, "movie", "别的片子"); selected != nil {
+		t.Fatalf("标题不匹配时不应接受，实际=%v", selected)
 	}
 }
 

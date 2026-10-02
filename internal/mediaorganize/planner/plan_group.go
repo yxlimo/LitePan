@@ -102,7 +102,10 @@ func (p *Planner) planGroupWithMatch(
 		}
 	}
 	if tmdbInfo.tmdbID == "" {
-		p.recordNeedsMatch(key, items, "TMDB 未匹配到影片，可手动选择", nil)
+		p.recordNeedsMatch(key, items,
+			needsMatchReasonForCandidates(tmdbInfo, key.hasYear),
+			yearMismatchCandidateEntry(tmdbInfo, key.mediaKind),
+		)
 	}
 
 	tmdbID := tmdbInfo.tmdbID
@@ -120,6 +123,12 @@ func (p *Planner) planGroupWithMatch(
 			year = tmdbInfo.year
 		}
 	} else if tmdbInfo.year != nil && year == nil {
+		year = tmdbInfo.year
+	}
+	// 年份只是加权项：文件名里的年份经常是错的。既然已经采用 TMDB 匹配，
+	// 就用 TMDB 的真实年份建目录名——否则会「匹配成功但把名字修正成错年份」，
+	// 之后每次整理都基于同一个错年份重复失败。
+	if tmdbInfo.yearMismatch && tmdbInfo.year != nil {
 		year = tmdbInfo.year
 	}
 	if tmdbInfo.title != "" {
@@ -144,6 +153,13 @@ func (p *Planner) planGroupWithMatch(
 	if key.dirName != "" && newFolderName != "" && !rules.IsSameGeneratedName(key.dirName, newFolderName) {
 		groupDirMeta["group_old_dir_name"] = key.dirName
 		groupDirMeta["group_new_dir_name"] = newFolderName
+	}
+	// 年份不符仍采用匹配时，把「声明年份 vs TMDB 年份」写进元数据，
+	// 让 UI 能提示「年份可能不准」，用户一眼能判断要不要人工复核。
+	if tmdbInfo.yearMismatch && key.hasYear && tmdbInfo.year != nil {
+		groupDirMeta["year_mismatch"] = true
+		groupDirMeta["declared_year"] = key.year
+		groupDirMeta["tmdb_year"] = *tmdbInfo.year
 	}
 	classificationDecision := p.classifyGroup(key.mediaKind, tmdbID, tmdbInfo.raw)
 	groupDirMeta = mergeMeta(groupDirMeta, classificationMetadata(classificationDecision))

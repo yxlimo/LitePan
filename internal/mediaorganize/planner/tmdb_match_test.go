@@ -67,7 +67,9 @@ func (*trailingNumberTMDBStub) FetchTVSeasons(context.Context, string) ([]json.R
 	return nil, nil
 }
 
-func TestMatchTMDBForGroupRejectsYearMismatchWithoutRepeatedQuery(t *testing.T) {
+// 年份是加权项不是红线：声明 2020、TMDB 只有 2010 版时仍应采用匹配，
+// 并用 TMDB 真实年份纠正目录名，避免「匹配失败 -> 名字被改成错年份 -> 重复失败」的死循环。
+func TestMatchTMDBForGroupAcceptsYearMismatchAndUsesTMDBYear(t *testing.T) {
 	year := 2020
 	var tmdb fallbackTMDBStub
 	p := &Planner{ctx: context.Background(), tmdb: &tmdb, log: func(string) {}}
@@ -76,11 +78,45 @@ func TestMatchTMDBForGroupRejectsYearMismatchWithoutRepeatedQuery(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.tmdbID != "" {
-		t.Fatalf("明确年份不符时不应采用候选，实际 tmdb id=%q", result.tmdbID)
+	if result.tmdbID != "1001" {
+		t.Fatalf("唯一强标题匹配不应因年份不符被丢弃，实际 tmdb id=%q", result.tmdbID)
 	}
-	if tmdb != 2 {
-		t.Fatalf("同一候选应只执行带年份和不带年份两次查询，实际 %d 次", tmdb)
+	if result.yearMismatch != true {
+		t.Fatalf("应标记 yearMismatch，实际 %+v", result)
+	}
+	if result.year == nil || *result.year != 2010 {
+		t.Fatalf("目录名应使用 TMDB 真实年份 2010，实际 %v", result.year)
+	}
+	// 置信度取「年份一致(0.9)」与「年份不符(0.65)」之间的中间档。
+	if result.confidence != 0.75 {
+		t.Fatalf("年份不符时置信度应取中间档 0.75，实际 %v", result.confidence)
+	}
+	if tmdb != 1 {
+		t.Fatalf("第一次查询即可命中放宽匹配，不应重复查询，实际 %d 次", tmdb)
+	}
+}
+
+// 年份一致时保持原有置信度与查询次数不变。
+func TestMatchTMDBForGroupKeepsExactYearConfidence(t *testing.T) {
+	year := 2010
+	var tmdb fallbackTMDBStub
+	p := &Planner{ctx: context.Background(), tmdb: &tmdb, log: func(string) {}}
+
+	result, err := p.matchTMDBForGroup(groupKey{mediaKind: "movie", title: "测试电影", year: year, hasYear: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.tmdbID != "1001" {
+		t.Fatalf("年份一致时应命中，实际 tmdb id=%q", result.tmdbID)
+	}
+	if result.yearMismatch {
+		t.Fatalf("年份一致时不应标记 yearMismatch: %+v", result)
+	}
+	if result.confidence != 0.9 {
+		t.Fatalf("年份一致时置信度应为 0.9，实际 %v", result.confidence)
+	}
+	if result.year == nil || *result.year != 2010 {
+		t.Fatalf("年份应保持 2010，实际 %v", result.year)
 	}
 }
 

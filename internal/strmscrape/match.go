@@ -141,7 +141,9 @@ func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year
 		best, doubt = pickTMDBScrapeMatch(rules.RawJSONListToMaps(results), nil, mediaType, title)
 	} else {
 		// 带年份的第一次查询只接受完全相等；±1 年必须在不限年份的完整候选中判断唯一性。
-		best = rules.PickTMDBSearchMatchForYear(rules.RawJSONListToMaps(results), year, mediaType, title)
+		// 这里必须用严格版：本次查询候选集已被 TMDB 按年份过滤，拿它判断放宽匹配会偏乐观，
+		// 并且会绕过后面的 doubt 标记（PickTMDBSearchMatchForYear 现在会放宽年份门禁）。
+		best = rules.PickTMDBSearchMatchExactYear(rules.RawJSONListToMaps(results), year, mediaType, title)
 	}
 	if best == nil && year != nil {
 		results, err = client.Search(ctx, title, nil, mediaType)
@@ -169,12 +171,22 @@ func searchTMDBInfo(ctx context.Context, client *tmdb.Client, title string, year
 
 func pickTMDBScrapeMatch(results []map[string]any, year *int, mediaType, title string) (map[string]any, bool) {
 	if best := rules.PickTMDBSearchMatchForYear(results, year, mediaType, title); best != nil {
-		return best, year == nil && len(results) > 1
+		// 年份只是加权项，选择器可能放宽年份门禁，所以存疑标记必须自己算：
+		// 声明年份与 TMDB 年份不一致时一律存疑，交给人工复核。
+		return best, tmdbScrapeMatchDoubt(best, year, mediaType, results)
 	}
 	if best := rules.PickUniqueTMDBAdjacentYearMatch(results, year, mediaType, title); best != nil {
 		return best, true
 	}
 	return nil, false
+}
+
+func tmdbScrapeMatchDoubt(best map[string]any, year *int, mediaType string, results []map[string]any) bool {
+	if year == nil {
+		return len(results) > 1
+	}
+	_, _, _, itemYear := rules.ExtractTMDBDisplayFields(best, mediaType)
+	return itemYear == nil || *itemYear != *year
 }
 
 func (s *Service) writeMatched(ctx context.Context, client *tmdb.Client, g workGroup, info tmdbInfo, overwrite bool) error {

@@ -23,7 +23,13 @@ type tmdbMatchResult struct {
 	confidence     float64
 	inferredSeason any
 	ambiguous      bool
-	candidates     []tmdbCandidate
+	// yearMismatch 表示「匹配上了，但 TMDB 年份与文件名/目录名里的年份不一致」。
+	// 年份是加权项而不是红线，所以这种情况仍然采用匹配结果，只是置信度降档，
+	// 并用 TMDB 的真实年份纠正目录名，避免下次整理重复失败。
+	yearMismatch bool
+	// yearMismatchCandidates 是「标题兼容但年份不符」的候选，用于 needs_match 文案。
+	yearMismatchCandidates []map[string]any
+	candidates             []tmdbCandidate
 }
 
 func (r tmdbMatchResult) confidenceOr(defaultVal float64, tmdbID string) float64 {
@@ -111,13 +117,17 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 
 	var selected map[string]any
 	var inferredSeason *int
+	// yearBlocked 记录「标题兼容但年份对不上」的候选，用于区分「真的没有这部片子」
+	// 和「有很像的候选但年份被声明年份挡住」两种情况。
+	yearBlocked := make([]map[string]any, 0, 3)
 
 	for _, attempt := range attempts {
-		hit, err := p.tmdbTryMatch(attempt.Title, attempt.Year, groupMediaType)
+		hit, blocked, err := p.tmdbTryMatch(attempt.Title, attempt.Year, groupMediaType)
 		if err != nil {
 			p.log(fmt.Sprintf("[计划] TMDB 查询异常 %s: %v", title, err))
 			break
 		}
+		yearBlocked = append(yearBlocked, blocked...)
 		if hit == nil {
 			continue
 		}
@@ -134,11 +144,12 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 			if stripped == "" || stripped == attempt.Title {
 				continue
 			}
-			hit, err := p.tmdbTryMatch(stripped, attempt.Year, groupMediaType)
+			hit, blocked, err := p.tmdbTryMatch(stripped, attempt.Year, groupMediaType)
 			if err != nil {
 				p.log(fmt.Sprintf("[计划] TMDB 查询异常 %s: %v", title, err))
 				break
 			}
+			yearBlocked = append(yearBlocked, blocked...)
 			if hit == nil {
 				continue
 			}
@@ -157,22 +168,24 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 
 	if selected == nil {
 		p.log(fmt.Sprintf("[计划] TMDB 未找到: %s (%v)，使用 guessit 识别结果", chosenTitle, chosenYear))
-		return tmdbMatchResult{}, nil
+		return tmdbMatchResult{yearMismatchCandidates: yearBlocked}, nil
 	}
 
 	tmdbID, tmdbTitle, tmdbOriginal, tmdbYear := rules.ExtractTMDBDisplayFields(selected, groupMediaType)
 	var displayYear *int
+	// 年份是否一致：以「声明年份」为准（组年份优先，其次是前面选定的年份）。
+	declaredYear := chosenYear
+	if declaredYear == nil {
+		declaredYear = keyYear
+	}
+	yearMismatch := declaredYear != nil && tmdbYear != nil && *declaredYear != *tmdbYear
 	confidence := 0.5
 	if groupMediaType == "tv" {
 		displayYear = rules.ResolveTMDBTVSeriesYear(selected, nil)
 		if displayYear == nil {
 			displayYear = tmdbYear
 		}
-		declared := chosenYear
-		if declared == nil {
-			declared = keyYear
-		}
-		if declared != nil && displayYear != nil && *declared == *displayYear {
+		if declaredYear != nil && displayYear != nil && *declaredYear == *displayYear {
 			confidence = 0.9
 		} else if displayYear != nil {
 			confidence = 0.65
@@ -188,6 +201,12 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 			confidence = 0.65
 		}
 	}
+	if yearMismatch {
+		// 年份不符但仍采用匹配：取两档之间的中间值，并让目录名用 TMDB 真实年份，
+		// 一次整理就把名字纠正回来。
+		confidence = 0.75
+		displayYear = tmdbYear
+	}
 
 	out := tmdbMatchResult{
 		tmdbID:       tmdbID,
@@ -197,6 +216,7 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 		year:         displayYear,
 		raw:          selected,
 		confidence:   confidence,
+		yearMismatch: yearMismatch,
 	}
 	// 目录名季号回退：文件名无 S/E 但目录名形如「某剧 第2季」时仍能推断季号
 	if inferredSeason == nil && groupMediaType == "tv" && key.dirName != "" {
@@ -211,32 +231,42 @@ func (p *Planner) matchTMDBForGroup(key groupKey, items []batchEntry) (tmdbMatch
 	return out, nil
 }
 
-func (p *Planner) tmdbTryMatch(title string, year *int, mediaType string) (map[string]any, error) {
+// tmdbTryMatch 查询并挑选 TMDB 候选。
+// 第二个返回值是「标题兼容但年份不符」的候选列表：匹配最终没成功时，
+// 它们能说明「不是没有这部片子，而是年份对不上」。
+func (p *Planner) tmdbTryMatch(title string, year *int, mediaType string) (map[string]any, []map[string]any, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	results, err := p.tmdb.Search(p.ctx, title, year, mediaType)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	maps := rules.RawJSONListToMaps(results)
 	selected := rules.PickTMDBSearchMatchForYear(maps, year, mediaType, title)
 	if selected != nil {
-		return selected, nil
+		return selected, nil, nil
 	}
+	blocked := rules.CollectTMDBYearMismatchCandidates(maps, year, mediaType, title)
 	if year != nil {
 		resultsNoYear, err := p.tmdb.Search(p.ctx, title, nil, mediaType)
 		if err != nil {
-			return nil, err
+			return nil, blocked, err
 		}
 		mapsNoYear := rules.RawJSONListToMaps(resultsNoYear)
 		if selected2 := rules.PickTMDBSearchMatchForYear(mapsNoYear, year, mediaType, title); selected2 != nil {
-			return selected2, nil
+			return selected2, blocked, nil
 		}
-		return nil, nil
+		// 年份不参与门禁的最后一次尝试：此前这里仍复用同一个年份门槛，
+		// 搜回来的结果照样被年份挡掉，等于白搜。
+		if selected2 := rules.PickTMDBSearchMatchRelaxed(mapsNoYear, mediaType, title); selected2 != nil {
+			return selected2, blocked, nil
+		}
+		blocked = append(blocked, rules.CollectTMDBYearMismatchCandidates(mapsNoYear, year, mediaType, title)...)
+		return nil, blocked, nil
 	}
-	return nil, nil
+	return nil, blocked, nil
 }
 
 func (p *Planner) detectMultiVersionAmbiguity(results []map[string]any, queryTitle, groupMediaType string) []map[string]any {
@@ -299,4 +329,45 @@ func derefInt(v *int) int {
 		return 0
 	}
 	return *v
+}
+
+// needsMatchReasonForCandidates 区分两种「没匹配上」：
+// 真的没有这部片子 vs 有很像的候选但声明年份对不上。
+// 年份已经不是红线，所以后者通常意味着文件名/目录名里的年份写错了。
+func needsMatchReasonForCandidates(info tmdbMatchResult, hasDeclaredYear bool) string {
+	if hasDeclaredYear && len(info.yearMismatchCandidates) > 0 {
+		return "TMDB 有同名候选但年份不一致，可核对后手动选择（也可修正文件名年份后重试）"
+	}
+	return "TMDB 未匹配到影片，可手动选择"
+}
+
+// yearMismatchCandidateEntry 把「标题兼容但年份不符」的候选整理成 needs_match 的附加信息，
+// 让用户在计划预览里能看到「阿凡达 (2009) {tmdb-19995} —— 年份与文件名不一致」这种可一键采纳的项。
+func yearMismatchCandidateEntry(info tmdbMatchResult, mediaKind string) map[string]any {
+	if len(info.yearMismatchCandidates) == 0 {
+		return nil
+	}
+	tmdbType := "movie"
+	if strings.TrimSpace(strings.ToLower(mediaKind)) == "tv" {
+		tmdbType = "tv"
+	}
+	cands := make([]map[string]any, 0, len(info.yearMismatchCandidates))
+	for _, item := range info.yearMismatchCandidates {
+		id, title, original, year := rules.ExtractTMDBDisplayFields(item, tmdbType)
+		entry := map[string]any{
+			"tmdb_id":    id,
+			"title":      title,
+			"year":       year,
+			"year_gap":   true,
+			"media_type": tmdbType,
+		}
+		if original != "" {
+			entry["original_title"] = original
+		}
+		cands = append(cands, entry)
+	}
+	return map[string]any{
+		"degraded_reason":          "year_mismatch",
+		"year_mismatch_candidates": cands,
+	}
 }
