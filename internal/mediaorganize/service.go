@@ -15,7 +15,9 @@ import (
 
 	"litepan/internal/domain"
 	"litepan/internal/driver"
-	"litepan/internal/file"
+	"litepan/internal/mediaorganize/classification"
+	"litepan/internal/mediaorganize/planner"
+	"litepan/internal/mediaorganize/recognition"
 	"litepan/internal/mediaorganize/rules"
 	"litepan/internal/mediaorganize/tmdb"
 	"litepan/internal/settings"
@@ -32,13 +34,18 @@ type LogEntry struct {
 
 type Service struct {
 	repo     domain.MediaOrganizeTaskRepository
-	files    *file.Service
+	files    planner.FileService
 	settings *settings.Service
 	dataDir  string
 	log      *slog.Logger
 
 	planner  PlannerBuilder
 	executor ExecutorApplier
+	// recognition/classification 是增强器依赖，Service 自己持有，
+	// 这样任何建 planner 的路径（包括人工匹配后的局部重规划）都能拿到，
+	// 不再出现「只有 Build 注入了、重规划没注入」的差异。
+	recognition    recognition.Enhancer
+	classification classification.Enhancer
 
 	mu              sync.Mutex
 	taskLogs        map[string][]LogEntry
@@ -52,12 +59,15 @@ type Service struct {
 
 type ServiceOptions struct {
 	Repo     domain.MediaOrganizeTaskRepository
-	Files    *file.Service
+	Files    planner.FileService
 	Settings *settings.Service
 	DataDir  string
 	Log      *slog.Logger
 	Planner  PlannerBuilder
 	Executor ExecutorApplier
+	// Recognition/Classification 供 Service 内部新建 planner 时注入增强器。
+	Recognition    recognition.Enhancer
+	Classification classification.Enhancer
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -81,6 +91,8 @@ func NewService(opts ServiceOptions) *Service {
 		log:             log,
 		planner:         p,
 		executor:        e,
+		recognition:     opts.Recognition,
+		classification:  opts.Classification,
 		taskLogs:        make(map[string][]LogEntry),
 		taskProgress:    make(map[string]map[string]any),
 		running:         make(map[string]struct{}),

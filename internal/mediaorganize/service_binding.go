@@ -67,15 +67,19 @@ func (s *Service) ApplyBindingToPlan(ctx context.Context, taskID, groupUID, tmdb
 	return plan, nil
 }
 
-func (s *Service) replanMatchedGroup(
+// newPlanner 是 Service 内部构造 planner 的唯一入口。
+// 增强器在这里统一注入，保证「建计划」和「人工匹配后局部重规划」两条路径行为一致：
+// 之前后者漏注分类增强器，会让 TV/Movie 标签丢失、文件落到任务根目录。
+func (s *Service) newPlanner(
 	ctx context.Context,
 	taskID string,
 	task *domain.MediaOrganizeTask,
 	cfg map[string]any,
 	settingsDict map[string]any,
-	group planner.ManualMatchGroup,
-	raw map[string]any,
-) (*Plan, error) {
+	logFn planner.LogFunc,
+	progress planner.ProgressFunc,
+	stopFn planner.StopFunc,
+) *planner.Planner {
 	accountID := CfgAccountID(cfg)
 	if accountID == 0 && task != nil {
 		accountID = task.AccountID
@@ -96,6 +100,30 @@ func (s *Service) replanMatchedGroup(
 		plannerSettings,
 		taskID,
 		tmdbClient,
+		logFn,
+		progress,
+		stopFn,
+	)
+	p.SetRecognitionEnhancer(s.recognition)
+	p.SetClassificationEnhancer(s.classification)
+	return p
+}
+
+func (s *Service) replanMatchedGroup(
+	ctx context.Context,
+	taskID string,
+	task *domain.MediaOrganizeTask,
+	cfg map[string]any,
+	settingsDict map[string]any,
+	group planner.ManualMatchGroup,
+	raw map[string]any,
+) (*Plan, error) {
+	p := s.newPlanner(
+		ctx,
+		taskID,
+		task,
+		cfg,
+		settingsDict,
 		func(string) {},
 		nil,
 		func() error { return nil },

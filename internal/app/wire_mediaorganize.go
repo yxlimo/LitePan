@@ -37,6 +37,10 @@ func wireMediaOrganize(
 			classification: classifier,
 		},
 		Executor: executorAdapter{files: files},
+		// Service 自身也要持有增强器：人工匹配后的局部重规划由 Service 内部建 planner，
+		// 不走 plannerAdapter.Build，漏注入会让分类标签丢失。
+		Recognition:    ai,
+		Classification: classifier,
 	})
 }
 
