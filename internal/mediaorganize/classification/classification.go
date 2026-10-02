@@ -29,6 +29,9 @@ type Decision struct {
 	RelativeSegments []string       `json:"relative_segments,omitempty"`
 	Evidence         map[string]any `json:"evidence,omitempty"`
 	DegradedReason   string         `json:"degraded_reason,omitempty"`
+	// MediaKind 供分类未命中时按媒体类型兜底建目录（movie -> 电影，tv -> 电视剧），
+	// 避免「不知道放哪儿」被当成「应该放根目录」。
+	MediaKind string `json:"media_kind,omitempty"`
 }
 
 type Enhancer interface {

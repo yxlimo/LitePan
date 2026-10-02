@@ -98,7 +98,9 @@ func TestMoveClassificationBuildsMissingFallbackDirectory(t *testing.T) {
 	}
 }
 
-func TestMoveClassificationUnmatchedUsesTargetRoot(t *testing.T) {
+// 分类参与但没命中时，不能把作品目录直接甩到 move 目标根（那往往就是网盘根）。
+// 应按媒体类型兜底进 电影/，并在诊断里登记，让用户知道这条是靠兜底归的类。
+func TestMoveClassificationUnmatchedFallsBackToMediaKind(t *testing.T) {
 	fs := &mockFS{dirs: map[string][]domain.FileItem{
 		"root":     {{ID: "category", Name: "原目录分类", IsDir: true}},
 		"category": {{ID: "movie", Name: "未知影片 (2020)", IsDir: true}},
@@ -118,12 +120,146 @@ func TestMoveClassificationUnmatchedUsesTargetRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	movieDir := findEnsureDir(plan.Actions, "电影")
+	if movieDir == nil || movieDir.TargetParentID != "target" {
+		t.Fatalf("未命中时未生成媒体类型兜底目录: %+v", plan.Actions)
+	}
 	workDir := findWorkDir(plan.Actions)
-	if workDir == nil || workDir.TargetParentID != "target" {
-		t.Fatalf("无法归类时应直接使用 move 目标根: %+v", workDir)
+	if workDir == nil {
+		t.Fatalf("未生成作品目录: %+v", plan.Actions)
+	}
+	if workDir.TargetParentID != "ref:"+movieDir.ID {
+		t.Fatalf("作品目录应落在媒体类型兜底目录下，实际父目录 %q", workDir.TargetParentID)
 	}
 	if findEnsureDir(plan.Actions, "原目录分类") != nil {
-		t.Fatalf("无法归类时不应镜像源目录: %+v", plan.Actions)
+		t.Fatalf("分类器明确未命中时不应镜像源目录: %+v", plan.Actions)
+	}
+	entries, _ := plan.Diagnostics["needs_classification"].([]map[string]any)
+	if len(entries) != 1 {
+		t.Fatalf("应登记 1 条 needs_classification 诊断，实际 %+v", plan.Diagnostics["needs_classification"])
+	}
+	if entries[0]["degraded_reason"] != "no_rule_matched" {
+		t.Fatalf("诊断应带降级原因: %+v", entries[0])
+	}
+}
+
+// 分类不可用（增强器为 nil）时按「分类器没参与」处理：保留源目录已有的分类层级，
+// 而不是直接落到 move 目标根。这里用剧集（不触发独立电影提升路径）验证。
+func TestMoveClassificationUnavailableKeepsSourceCategoryHierarchy(t *testing.T) {
+	fs := &mockFS{dirs: map[string][]domain.FileItem{
+		"root":     {{ID: "category", Name: "原目录分类", IsDir: true}},
+		"category": {{ID: "show", Name: "脱口秀和Ta的朋友们 (2024)", IsDir: true}},
+		"show": {
+			{ID: "s1", Name: "Season 01", IsDir: true},
+			{ID: "f1", Name: "脱口秀和Ta的朋友们.S01E01.mkv"},
+		},
+	}}
+	p := planner.New(context.Background(), fs, 1, planner.TaskConfig{
+		TargetDirectoryID: "root",
+		TargetRootID:      "target",
+		ActionType:        "move",
+		UseTMDB:           false,
+		Recursive:         true,
+	}, nil, "task", nil, nil, nil, nil)
+	// 不注入分类增强器
+	plan, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	categoryDir := findEnsureDir(plan.Actions, "原目录分类")
+	if categoryDir == nil {
+		t.Fatalf("分类不可用时应保留源目录分类层级: %+v", plan.Actions)
+	}
+	if categoryDir.TargetParentID != "target" {
+		t.Fatalf("源目录分类层级应挂在 move 目标根下，实际 %q", categoryDir.TargetParentID)
+	}
+	if plan.Diagnostics["classification_degraded_count"] != 1 {
+		t.Fatalf("分类不可用应记录降级诊断: %+v", plan.Diagnostics)
+	}
+}
+
+// batchMixedClassificationStub 模拟 region 模板：只有拿到 TMDB 详情才可能命中二级，
+// 没匹配到 TMDB 的组会返回 Matched=false（degraded）。
+type batchMixedClassificationStub struct{}
+
+func (batchMixedClassificationStub) Available() bool { return true }
+
+func (batchMixedClassificationStub) Classify(_ context.Context, req classification.Request) (classification.Decision, error) {
+	if req.TMDBID == "" {
+		return classification.Decision{
+			Applied: true, Template: "region", MediaKind: req.MediaType,
+			DegradedReason: "tmdb_detail_unavailable",
+		}, nil
+	}
+	return classification.Decision{
+		Applied: true, Matched: true, Template: "region", MediaKind: req.MediaType,
+		Category: "国产", RelativeSegments: []string{"电影", "国产"},
+	}, nil
+}
+
+// 批量处理时分类成败不同，不应该表现为「有的进分类目录、有的落到任务根目录」。
+// 三部影片里两部匹配到 TMDB、第三部没匹配上，三者的作品目录都必须在 电影/ 之下。
+func TestMoveClassificationBatchMixedMatchNeverLandsOnMoveRoot(t *testing.T) {
+	fs := &mockFS{dirs: map[string][]domain.FileItem{
+		"root": {
+			{ID: "d1", Name: "阿凡达 (2009)", IsDir: true},
+			{ID: "d2", Name: "流浪地球 (2019)", IsDir: true},
+			{ID: "d3", Name: "某未知片子 (2018)", IsDir: true},
+		},
+		"d1": {{ID: "f1", Name: "阿凡达.2009.mkv"}},
+		"d2": {{ID: "f2", Name: "流浪地球.2019.mkv"}},
+		"d3": {{ID: "f3", Name: "某未知片子.2018.mkv"}},
+	}}
+	tmdb := &mockTMDB{searchFn: func(query string, _ *int) []map[string]any {
+		switch query {
+		case "阿凡达":
+			return []map[string]any{{"id": 19995, "title": "阿凡达", "release_date": "2009-12-18"}}
+		case "流浪地球":
+			return []map[string]any{{"id": 348350, "title": "流浪地球", "release_date": "2019-02-05"}}
+		}
+		return nil
+	}}
+	p := planner.New(context.Background(), fs, 1, planner.TaskConfig{
+		TargetDirectoryID: "root",
+		TargetRootID:      "target",
+		ActionType:        "move",
+		UseTMDB:           true,
+		Recursive:         true,
+	}, planner.Settings{"mo_tmdb_api_key": "test-key"}, "task", tmdb, nil, nil, nil)
+	p.SetClassificationEnhancer(batchMixedClassificationStub{})
+
+	plan, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchedWorkDirs, unmatchedWorkDirs := 0, 0
+	for i := range plan.Actions {
+		a := &plan.Actions[i]
+		isWork, _ := a.Metadata["is_work_dir"].(bool)
+		if !isWork {
+			continue
+		}
+		if a.TargetParentID == "target" {
+			t.Fatalf("作品目录 %q 直接挂在 move 目标根（用户看到的就是落到任务根目录）: %+v", a.TargetName, a)
+		}
+		if a.Metadata["classification_matched"] == true {
+			matchedWorkDirs++
+		} else {
+			unmatchedWorkDirs++
+		}
+	}
+	if matchedWorkDirs != 2 {
+		t.Fatalf("应有 2 个分类命中的作品目录，实际 %d; actions=%+v", matchedWorkDirs, plan.Actions)
+	}
+	if unmatchedWorkDirs != 1 {
+		t.Fatalf("应有 1 个分类未命中的作品目录，实际 %d; actions=%+v", unmatchedWorkDirs, plan.Actions)
+	}
+	// 命中的进 电影/国产，未命中的兜底进 电影/
+	if findEnsureDir(plan.Actions, "国产") == nil {
+		t.Fatalf("匹配成功的作品应进入二级分类目录: %+v", plan.Actions)
+	}
+	if findEnsureDir(plan.Actions, "电影") == nil {
+		t.Fatalf("未匹配成功的作品应兜底进入 电影/: %+v", plan.Actions)
 	}
 }
 

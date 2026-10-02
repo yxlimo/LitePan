@@ -167,14 +167,13 @@ func (p *Planner) planGroupWithMatch(
 
 	promotedMovieParent := ""
 	promotedMoveTarget := ""
+	promotedUsedFallback := false
 	if key.mediaKind == "movie" && len(items) > 0 {
 		sampleAncestors := items[0].ancestors
 		promotedMovieParent = rules.GetPromotedMovieParentID(sampleAncestors, key.dirID, p.parentID, p.scannedDirParents)
-		if classificationDecision.Applied {
-			promotedMoveTarget = p.classificationParentRef(classificationDecision)
-		} else {
-			promotedMoveTarget = p.resolvePromotedMovieTargetParent(sampleAncestors, key.dirID)
-		}
+		promotedMoveTarget, promotedUsedFallback = p.resolvePromotedMoveTarget(
+			classificationDecision, key.mediaKind, sampleAncestors, key.dirID,
+		)
 	}
 
 	promotedMoveRef := ""
@@ -188,6 +187,7 @@ func (p *Planner) planGroupWithMatch(
 			tmdbInfo.confidenceOr(0.6, tmdbID),
 			classificationMetadata(classificationDecision),
 		)
+		p.recordNeedsClassification(key, items, classificationDecision, promotedUsedFallback)
 	}
 
 	if p.actionType == "rename" && key.dirID != "" && newFolderName != "" && key.dirName != "" {

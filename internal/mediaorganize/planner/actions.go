@@ -84,13 +84,8 @@ func (p *Planner) ensureWorkDirAction(
 	if promotedMoveRef != "" {
 		return promotedMoveRef
 	}
-	parentRef := ""
-	if classificationDecision.Applied {
-		parentRef = p.classificationParentRef(classificationDecision)
-	} else {
-		categoryAncestors := p.categoryAncestors(key, items)
-		parentRef = p.buildTargetCategoryParentRef(categoryAncestors)
-	}
+	parentRef, usedFallback := p.resolveWorkDirParent(key, items, classificationDecision)
+	p.recordNeedsClassification(key, items, classificationDecision, usedFallback)
 	ref := p.ensureDirAction(parentRef, workDirName)
 	srcDirID := key.dirID
 	if strings.HasPrefix(ref, "ref:") {
