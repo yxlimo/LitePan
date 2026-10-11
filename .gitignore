@@ -18,8 +18,13 @@
 .vscode/
 
 # 前端依赖与本地缓存
+node_modules/
 web/node_modules/
 web/*.tsbuildinfo
+
+# 前端构建产物：只内嵌进二进制，不入库；仅保留未构建时的占位页
+/internal/api/web/*
+!/internal/api/web/index.html
 
 # Docker 镜像导出（NAS load 用）
 dist/*.tar
@@ -34,3 +39,7 @@ dist/*.tar.gz
 .env
 .env.*
 drivers/115/
+
+# 本地 mise 覆盖配置：个人专属命令，不入库
+mise.local.toml
+.mise.local.toml

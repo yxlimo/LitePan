@@ -1,0 +1,6 @@
+packages:
+  - "."
+
+# rolldown 1.2.6+ 对 rtf.js 源码里的纯类型导出报 MISSING_EXPORT，锁回 1.2.5。
+overrides:
+  rolldown: 1.2.5

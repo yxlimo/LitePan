@@ -1,7 +1,7 @@
 services:
-  litepan:
-    image: ponphil/litepan:beta
-    container_name: litepan
+  litepan-strmforge:
+    image: yxlimo/litepan-strmforge:dev
+    container_name: litepan-strmforge
     restart: unless-stopped
     ports:
       - "5211:5211"

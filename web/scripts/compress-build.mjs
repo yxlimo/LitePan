@@ -1,6 +1,6 @@
 import { constants as zlibConstants, gzip } from "node:zlib";
 import { promisify } from "node:util";
-import { readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,9 @@ async function collectFiles(directory) {
   }
   return files;
 }
+
+// vite 构建产物直接写进内嵌目录；目录可能不存在（例如只跑了空构建）
+await mkdir(outputDir, { recursive: true });
 
 let originalBytes = 0;
 let embeddedBytes = 0;

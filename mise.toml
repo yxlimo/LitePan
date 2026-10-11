@@ -1,0 +1,82 @@
+# LitePan 统一开发入口：所有构建、测试、镜像命令都由这里管理。
+# 版本固定在项目级，禁止改全局配置。
+
+[tools]
+node = "24"
+go = "1.27.2"
+pnpm = "12.10.1"
+
+[env]
+# 仓库不依赖 go.work，避免本机工具链互相干扰
+GOWORK = "off"
+
+# ---------- 前端（依赖装在 web/，命令一律在 web/ 下跑） ----------
+
+# 所有前端任务共享的配置：切到 web/，并把本地二进制目录加进 PATH
+[task_templates."web"]
+dir = "web"
+env = { PATH = "{{env.PATH}}:./node_modules/.bin" }
+
+[tasks."web:install"]
+description = "安装前端依赖"
+extends = "web"
+run = "pnpm install"
+
+[tasks."web:dev"]
+description = "启动前端开发服务器（/api 代理到后端）"
+extends = "web"
+run = "vite"
+env = { LITEPAN_API_PROXY = "http://127.0.0.1:5211" }
+
+[tasks."web:type-check"]
+description = "前端类型检查"
+extends = "web"
+run = "vue-tsc -b"
+
+[tasks."web:build"]
+description = "构建前端产物到 internal/api/web（内嵌目录）"
+extends = "web"
+depends = ["web:type-check"]
+run = "vite build && node scripts/compress-build.mjs"
+
+[tasks."web:test"]
+description = "运行前端测试脚本"
+extends = "web"
+run = "node scripts/test-upload-dispatcher.mjs && node scripts/test-upload-task-tree.mjs"
+
+# ---------- 后端 ----------
+
+[tasks."lint:install"]
+description = "安装 golangci-lint"
+run = "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0"
+
+[tasks.lint]
+description = "运行 golangci-lint"
+run = "golangci-lint run -c .golangci.yml ./..."
+
+[tasks.test]
+description = "运行后端测试（含竞态检测）"
+run = "go test -race ./..."
+
+[tasks.build]
+description = "构建后端（fuse 标签）"
+run = "go build -tags fuse ./..."
+
+[tasks."build:nofuse"]
+description = "构建后端（无 fuse 标签）"
+run = "go build ./..."
+
+# ---------- 镜像 ----------
+
+[tasks."docker:build"]
+description = "构建 Docker 镜像（先本地构建前端，镜像直接内嵌）"
+depends = ["web:build"]
+run = "mkdir -p dist && docker build --platform linux/amd64 --build-arg GO_VERSION={{tools.go.version}} --build-arg NODE_VERSION={{tools.node.version}} -t yxlimo/litepan-strmforge:dev ."
+
+[tasks."docker:up"]
+description = "docker compose 起服务"
+run = "docker compose up -d --build"
+
+[tasks."docker:down"]
+description = "docker compose 停服务"
+run = "docker compose down"

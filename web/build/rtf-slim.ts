@@ -1,14 +1,20 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import type { Plugin } from "vite";
 
-const RTF_SRC = fileURLToPath(new URL("../node_modules/rtf.js/src/", import.meta.url));
+// pnpm 下 web/node_modules/rtf.js 是指向 .pnpm/ 存储的符号链接，而 vite 会用
+// realpath 解析模块 id；这里统一取真实路径，否则下面的源码改写匹配不到。
+const RTF_DIR = realpathSync(fileURLToPath(new URL("../node_modules/rtf.js/", import.meta.url)));
+const RTF_SRC = join(RTF_DIR, "src") + "/";
+// codepage 是 rtf.js 的依赖、不是本项目的依赖，只能从 rtf.js 自己所在位置解析。
+const requireRtf = createRequire(join(RTF_DIR, "package.json"));
 const SHIM = fileURLToPath(new URL("./codepage-shim.ts", import.meta.url));
 const LEGACY_TABLE_MARKER = '"__RTF_LEGACY_CODEPAGES__"';
 
 function legacyCodepageTables(): string {
-  const cptable = createRequire(import.meta.url)("codepage") as Record<string, { dec?: (string | undefined)[] }>;
+  const cptable = requireRtf("codepage") as Record<string, { dec?: (string | undefined)[] }>;
   const tables = Object.fromEntries(Object.entries(cptable)
     .filter(([codepage, table]) => /^\d+$/.test(codepage) && table.dec?.length === 0x100)
     .map(([codepage, table]) => [codepage, table.dec!.slice(0x80).map((char) => char ?? "\uFFFD")]));

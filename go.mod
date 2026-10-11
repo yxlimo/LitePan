@@ -1,6 +1,6 @@
 module litepan
 
-go 1.26.6
+go 1.27.2
 
 require (
 	github.com/alde/go-fish v0.0.0-20260611152328-df695ecc9fbf

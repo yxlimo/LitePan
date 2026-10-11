@@ -3,14 +3,51 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="referrer" content="no-referrer" />
-    <link rel="icon" href="/favicon.ico" />
-    <title>LitePan</title>
-    <script type="module" crossorigin src="/assets/index-DiePXo-R.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/vue-vendor-ZnxwVLGj.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-RIHIpgqz.css">
+    <title>LitePan · 前端尚未构建</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #0f1115;
+        color: #e6e8eb;
+      }
+      main {
+        max-width: 34rem;
+        padding: 2.5rem;
+        text-align: center;
+      }
+      h1 {
+        margin: 0 0 0.75rem;
+        font-size: 1.5rem;
+      }
+      p {
+        margin: 0.5rem 0;
+        line-height: 1.7;
+        color: #a4abb4;
+      }
+      code {
+        padding: 0.15rem 0.4rem;
+        border-radius: 0.25rem;
+        background: #1c2026;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.9rem;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <main>
+      <h1>LitePan 前端尚未构建</h1>
+      <p>当前二进制只内嵌了这个占位页面，管理界面还没有被打包进来。</p>
+      <p>在项目根目录执行 <code>mise run build:web</code> 重新构建前端，</p>
+      <p>或用 <code>mise run docker:build</code> 构建包含前端界面的镜像。</p>
+      <p>API 接口不受影响，仍可正常调用。</p>
+    </main>
   </body>
 </html>
