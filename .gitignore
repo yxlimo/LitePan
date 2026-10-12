@@ -22,9 +22,9 @@ node_modules/
 web/node_modules/
 web/*.tsbuildinfo
 
-# 前端构建产物：只内嵌进二进制，不入库；仅保留未构建时的占位页
-/internal/api/web/*
-!/internal/api/web/index.html
+# 前端构建产物：只内嵌进二进制，整个目录不入库。
+# 未构建前端时由 mise run web:placeholder 从 web/build/placeholder.html 生成占位页。
+/internal/api/web/
 
 # Docker 镜像导出（NAS load 用）
 dist/*.tar
