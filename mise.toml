@@ -9,13 +9,14 @@ pnpm = "12.10.1"
 [env]
 # 仓库不依赖 go.work，避免本机工具链互相干扰
 GOWORK = "off"
+# 前端依赖装在 web/，把它的二进制目录加进 PATH，任务可直接调用 vite、vue-tsc
+_.path = ["{{config_root}}/web/node_modules/.bin"]
 
 # ---------- 前端（依赖装在 web/，命令一律在 web/ 下跑） ----------
 
-# 所有前端任务共享的配置：切到 web/，并把本地二进制目录加进 PATH
+# 所有前端任务共享的配置：切到 web/。PATH 由上面的 [env] _.path 提供。
 [task_templates."web"]
 dir = "web"
-env = { PATH = "{{env.PATH}}:./node_modules/.bin" }
 
 [tasks."web:install"]
 description = "安装前端依赖"

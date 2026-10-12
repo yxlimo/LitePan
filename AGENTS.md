@@ -22,7 +22,7 @@
 - 带冒号的任务名写成 `[tasks."web:build"]`。
 - 不要给任务添加 `sources`。
 - 任务中不要出现 `docker --format='{{...}}'`。改用 `[env]` 中定义的变量。
-- 修改 `web/` 下任务的公共配置时改 `task_templates."web"`，不要逐个任务复制 `dir` 和 `PATH`。
+- 修改 `web/` 下任务的公共配置时改 `task_templates."web"`，不要逐个任务复制 `dir`。
 
 ## Docker
 

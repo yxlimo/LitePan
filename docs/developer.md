@@ -38,7 +38,8 @@ mise run docker:down        # docker compose 停服务
 ## 前端依赖与命令定义
 
 - 前端依赖只安装在 `web/`：`web/node_modules`、`web/pnpm-lock.yaml`、`web/pnpm-workspace.yaml`。仓库根目录不会出现 `node_modules`。
-- 前端任务通过 `task_templates."web"` 统一切换到 `web/`，并把 `web/node_modules/.bin` 加入 `PATH`。
+- 前端任务通过 `task_templates."web"` 统一切换到 `web/`。
+- `web/node_modules/.bin` 由顶层 `[env]` 的 `_.path` 加入 `PATH`，对所有任务生效，任务内可直接调用 `vite`、`vue-tsc`。
 - 命令只在 `mise.toml` 中定义一次：任务直接调用 `vite`、`vue-tsc`、`node`，不通过 pnpm 转发 `web/package.json` 的 `scripts`。`web/package.json` 不再包含 `scripts` 字段。
 - `web/package.json` 中构建链路相关的依赖（`vite`、`vue-tsc`、`vue`、`pdfjs-dist` 等）写死版本，不带 `^`；其余依赖仍使用 `^`。升级依赖后执行一次 `mise run web:build` 验证。
 
