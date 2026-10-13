@@ -6,6 +6,9 @@
 *.db-wal
 *.db-shm
 
+# 本地开发测试数据：假媒体文件与 dev 运行时的数据目录
+/tests/
+
 # 构建产物
 /litepan
 /dist/
@@ -43,3 +46,7 @@ drivers/115/
 # 本地 mise 覆盖配置：个人专属命令，不入库
 mise.local.toml
 .mise.local.toml
+
+# 个人评审意见与一次性脚本，不属于仓库内容
+/advice.md
+/tools/testdata/

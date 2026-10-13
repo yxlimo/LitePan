@@ -8,6 +8,13 @@
 - 前端依赖只安装在 `web/`。不要在仓库根目录安装依赖，不要创建根目录的 `package.json`。
 - 个人命令写在 `mise.local.toml`，不要写进 `mise.toml`。
 
+## Go 编码约定
+
+- 禁止在改函数签名时移除第一个 `ctx context.Context` 参数。暂时用不到时写成 `_ context.Context` 保留位置。
+- 依赖在构造函数里注入，缺少必需依赖直接 `panic`；方法内不做 `nil` 判断，也不写 `ensureServiceReady` 之类的运行期前置校验。
+- 类型需要落库或对外序列化时，在类型上实现 `MarshalJSON` / `UnmarshalJSON` / `Value` / `Scan`，不要在 store 或 api 层另写一套转换结构。
+- SQLite 没有原生 JSON 类型，声明 `JSON` 会得到 `NUMERIC affinity`（`'0123'` 会被转成整数）。JSON 内容存 `TEXT`，需要按字段查询时用 `json_extract`。
+
 ## 前端产物
 
 - 不要提交 `internal/api/web/` 下的任何文件。需要占位页时执行 `mise run web:placeholder`。

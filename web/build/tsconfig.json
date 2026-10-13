@@ -1,0 +1,13 @@
+{
+  "//": "构建期插件专用配置。rtf.js 源码类型不干净，纳入主 tsconfig 会拖垮类型检查；这里只为让 tsconfig 解析止步于本目录，避免向上命中仓库外的 tsconfig。",
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}
