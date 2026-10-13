@@ -60,7 +60,14 @@ const PAGE_TABS: Record<string, { defaultTab: string; tabs: Record<string, strin
   },
   tasks: {
     defaultTab: "strm",
-    tabs: { strm: "STRM 任务", cache: "缓存任务", organize: "目录整理", automation: "自动联动" },
+    tabs: {
+      strm: "STRM 任务",
+      cache: "缓存任务",
+      organize: "目录整理",
+      automation: "自动联动",
+      // ↓ litepan-strmforge：新增项置于最后并空行隔开，便于与上游合并
+      strmforge: "STRM 映射",
+    },
   },
   tools: {
     defaultTab: "scrape",

@@ -125,6 +125,9 @@ func wireHTTPServer(cfg config.Config, logs *logx.Manager, st *storeBundle, core
 		return nil, err
 	}
 	router := api.NewRouter(api.Deps{
+		// ↓ litepan-strmforge
+		StrmForge: svc.strmForge,
+
 		Logs:              logs,
 		AccountSvc:        svc.account,
 		AccountProfile:    svc.accountProfile,

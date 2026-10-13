@@ -49,6 +49,7 @@ import (
 	"litepan/internal/spacecleanup"
 	"litepan/internal/strm"
 	"litepan/internal/strmdelete"
+	"litepan/internal/strmforge"
 	"litepan/internal/strmscrape"
 	"litepan/internal/upload"
 )
@@ -58,6 +59,9 @@ var webFS embed.FS
 
 // Deps 是 API 层所需依赖（只依赖接口/服务，不感知具体存储实现）。
 type Deps struct {
+	// ↓ litepan-strmforge 新增项置于最前并空行隔开，便于与上游合并。
+	StrmForge *strmforge.Service
+
 	Logs              *logx.Manager
 	AccountSvc        *account.Service
 	AccountProfile    *accountprofile.Service
@@ -242,6 +246,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/logs/cleanup", h.cleanupLogs)
 			r.Post("/logs/cleanup/keep-today", h.cleanupLogsKeepToday)
 			r.Post("/logs/cleanup/all", h.cleanupLogsAll)
+			// ↓ litepan-strmforge：路由置于第一级，鉴权沿用本分组。
+			NewStrmForgeHandler(d.StrmForge).Register(r)
+
 			r.Route("/admin", func(r chi.Router) {
 				r.Get("/system-config", h.adminSystemConfig)
 				r.Route("/backups", func(r chi.Router) {

@@ -63,6 +63,10 @@ import AdminRowActions from "@/components/admin/AdminRowActions.vue";
 import SectionTabBar from "@/components/admin/SectionTabBar.vue";
 import BandMenuButton from "@/components/admin/band/BandMenuButton.vue";
 import FolderPickerModal from "@/components/file/FolderPickerModal.vue";
+// ↓ litepan-strmforge：新增项置于最前并空行隔开，便于与上游合并
+import type StrmForgePanelComponent from "@/components/admin/StrmForgePanel.vue";
+const StrmForgePanel = defineAsyncComponent(() => import("@/components/admin/StrmForgePanel.vue"));
+
   // 重面板仅在对应 Tab 或抽屉首次打开时加载。
 import type CacheRetentionPanelComponent from "@/components/admin/CacheRetentionPanel.vue";
 import type MediaOrganizePanelComponent from "@/components/admin/MediaOrganizePanel.vue";
@@ -98,6 +102,9 @@ import { formatElapsedMs, formatTime } from "@/utils/format";
 import "@/styles/admin-shared.css";
 import "@/styles/admin-table.css";
 
+// ↓ litepan-strmforge
+const STRMFORGE_TAB = "strmforge";
+
 const CACHE_TAB = "cache";
 const STRM_TAB = "strm";
 const ORGANIZE_TAB = "organize";
@@ -108,6 +115,8 @@ const tabs = [
   { key: CACHE_TAB, label: "缓存任务" },
   { key: ORGANIZE_TAB, label: "目录整理" },
   { key: AUTOMATION_TAB, label: "自动联动" },
+  // ↓ litepan-strmforge：按界面要求放在最右，上游改前面的标签不影响此处
+  { key: STRMFORGE_TAB, label: "STRM 映射" },
 ];
 
 type DrawerKind = "strm" | "organize" | "cache";
@@ -123,6 +132,9 @@ const drawerKindsVisited = reactive<Record<DrawerKind, boolean>>({
 
 const retentionPanelRef = ref<InstanceType<typeof CacheRetentionPanelComponent> | null>(null);
 const cacheBandRef = ref<InstanceType<typeof CacheSignalBand> | null>(null);
+// ↓ litepan-strmforge
+const strmForgePanelRef = ref<InstanceType<typeof StrmForgePanelComponent> | null>(null);
+
 // 缓存页顶部仪表带的任务统计，由 CacheRetentionPanel 上报。
 const cacheTaskStats = ref({ total: 0, enabled: 0, error: 0 });
 const cacheSettingsRef = ref<SettingsPanelExpose | null>(null);
@@ -175,7 +187,14 @@ const { confirmDiscardChanges } = useSettingsPageDirty(settingsPageDirty, revert
 
 const { activeTab, setActiveTab } = useSectionTabRoute(
   STRM_TAB,
-  [STRM_TAB, CACHE_TAB, ORGANIZE_TAB, AUTOMATION_TAB],
+  [
+    // ↓ litepan-strmforge
+    STRMFORGE_TAB,
+    STRM_TAB,
+    CACHE_TAB,
+    ORGANIZE_TAB,
+    AUTOMATION_TAB,
+  ],
   {
   beforeTabChange: async (_from, _to) => {
     if (!settingsDrawerOpen.value) return true;
@@ -1075,6 +1094,16 @@ watch(activeTab, (tab) => {
   <div class="settings strm-page">
     <SectionTabBar :model-value="activeTab" :tabs="tabs" @update:model-value="setActiveTab">
       <template #actions>
+        <!-- ↓ litepan-strmforge：新增分支置于链首并空行隔开，便于与上游合并 -->
+        <AppButton
+          v-if="activeTab === STRMFORGE_TAB"
+          type="button"
+          variant="primary"
+          @click="strmForgePanelRef?.openCreate()"
+        >
+          添加任务
+        </AppButton>
+
         <BandMenuButton
           v-if="bandHidden"
           :settings-label="bandSettingsLabel"
@@ -1100,12 +1129,7 @@ watch(activeTab, (tab) => {
         >
           添加任务
         </AppButton>
-        <AppButton
-          v-else-if="activeTab === AUTOMATION_TAB"
-          type="button"
-          variant="primary"
-          @click="automationPanelRef?.openCreate()"
-        >
+        <AppButton v-else-if="activeTab === AUTOMATION_TAB" type="button" variant="primary" @click="automationPanelRef?.openCreate()">
           新增联动
         </AppButton>
       </template>
@@ -1280,6 +1304,11 @@ watch(activeTab, (tab) => {
         />
         <MediaOrganizePanel ref="organizePanelRef" @stats="organizeTaskStats = $event" />
       </div>
+    </div>
+
+    <!-- ↓ litepan-strmforge：面板挂载置于首位并空行隔开，便于与上游合并 -->
+    <div v-if="tabsVisited[STRMFORGE_TAB]" v-show="activeTab === STRMFORGE_TAB">
+      <StrmForgePanel ref="strmForgePanelRef" />
     </div>
 
     <div v-if="tabsVisited[AUTOMATION_TAB]" v-show="activeTab === AUTOMATION_TAB">

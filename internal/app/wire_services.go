@@ -25,13 +25,18 @@ import (
 	"litepan/internal/playback"
 	"litepan/internal/quarktv"
 	"litepan/internal/settings"
+	"litepan/internal/store"
 	"litepan/internal/strm"
 	"litepan/internal/strmdelete"
+	"litepan/internal/strmforge"
 	"litepan/internal/strmscrape"
 	"litepan/internal/upload"
 )
 
 type servicesBundle struct {
+	// ↓ litepan-strmforge 新增项置于最前并空行隔开，便于与上游合并。
+	strmForge *strmforge.Service
+
 	files            *file.Service
 	uploads          *upload.Manager
 	offlineDownloads *offlinedownload.Service
@@ -62,8 +67,14 @@ func wireServices(cfg config.Config, logs *logx.Manager, st *storeBundle, core *
 		startupGate = core.sched.StartupReady()
 	}
 	favoritesSvc := favorites.NewService(cfg.DBPath, logs.For(logx.ModuleSystem))
+
 	fileSvc := file.NewService(core.exec, core.cache, st.store.Accounts, core.bus, st.settings, core.listHits)
 	fileSvc.SetLogger(logs.For(logx.ModuleFileOp))
+	// ↓ litepan-strmforge：需要 fileSvc，放在它构造之后
+	strmForgeRepos := store.NewStrmForgeRepos(st.store.DB)
+	strmForgeSvc := strmforge.NewService(
+		strmForgeRepos.Tasks, strmForgeRepos.Nodes, fileSvc, logs.For(logx.ModuleFileOp))
+
 	playbackSvc := playback.NewService(core.exec, core.cache)
 	playbackSvc.SetLogger(logs.For(logx.ModuleSystem))
 	strmSvc, coord := wireSTRM(st, fileSvc, playbackSvc, core.bus, logs, cfg.DataDir, cfg.StrmDir, cfg.ListenAddr, core.secret)
@@ -218,6 +229,9 @@ func wireServices(cfg config.Config, logs *logx.Manager, st *storeBundle, core *
 	automationSvc.Register(core.bus)
 	strmSvc.SetAutomationManagedChecker(automationSvc.IsStrmTaskManaged)
 	return &servicesBundle{
+		// ↓ litepan-strmforge
+		strmForge: strmForgeSvc,
+
 		files:            fileSvc,
 		uploads:          uploadSvc,
 		offlineDownloads: offlineDownloadSvc,
