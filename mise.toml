@@ -78,12 +78,36 @@ description = "构建后端（无 fuse 标签）"
 depends = ["web:placeholder"]
 run = "go build ./..."
 
+# ---------- 本地开发 ----------
+
+[tasks."test:scanflow"]
+description = "扫描流程的端到端集成测试（独立于日常单测；基线固化在 /tmp/strmforge-e2e/baseline）"
+# 只清空库与工作素材，保留 baseline/ —— 基线固化后每次运行直接复用。
+# go test 的工作目录是包目录，素材路径必须给绝对路径。
+run = "rm -rf /tmp/strmforge-e2e/empty.db /tmp/strmforge-e2e/work-corpus && mkdir -p /tmp/strmforge-e2e && STRMFORGE_E2E_DB=/tmp/strmforge-e2e/empty.db STRMFORGE_E2E_CORPUS=$(pwd)/tests/rel go test -tags=integration -count=1 -v -timeout=20m ./internal/strmforge/ -run TestStrmForgeScanFlow"
+
+[tasks."test:scanflow:rebuild"]
+description = "强制重建集成测试的基线库"
+run = "STRMFORGE_E2E_REBUILD=1 mise run test:scanflow"
+
+[tasks."dev:seed"]
+description = "准备 tests/ 测试数据（假媒体文件、数据库、管理员口令、本地目录账号）"
+run = "go run ./tools/devseed -root ."
+
+[tasks."dev:run"]
+description = "本地启动服务（端口 5211；数据都在 tests/ 下）"
+depends = ["web:placeholder", "dev:seed"]
+run = "go run ./cmd/litepan"
+env = { LITEPAN_DATA_DIR = "tests/data", LITEPAN_LISTEN = ":5211", LITEPAN_LOG_LEVEL = "debug" }
+
 # ---------- 镜像 ----------
 
 [tasks."docker:build"]
 description = "构建 Docker 镜像（先本地构建前端，镜像直接内嵌）"
 depends = ["web:placeholder", "web:build"]
-run = "mkdir -p dist && docker build --platform linux/amd64 --build-arg GO_VERSION={{tools.go.version}} --build-arg NODE_VERSION={{tools.node.version}} -t yxlimo/litepan-strmforge:dev ."
+# 镜像名写全 docker.io/：podman 不会给含 registry 的名字补 localhost/ 前缀，
+# docker compose 归一化后也是这个名字，两端对齐就不用再补 tag。
+run = "mkdir -p dist && docker build --platform linux/amd64 --build-arg GO_VERSION={{tools.go.version}} --build-arg NODE_VERSION={{tools.node.version}} -t docker.io/yxlimo/litepan-strmforge:dev ."
 
 [tasks."docker:up"]
 description = "docker compose 起服务"
